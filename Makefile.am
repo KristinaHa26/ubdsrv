@@ -7,7 +7,7 @@ EXTRA_DIST = \
 	.gitignore \
 	LICENSE
 
-SUBDIRS = include lib tests
+SUBDIRS = include lib tests cryptsetup_backend_test
 
 AM_CXXFLAGS = -std=c++20
 
@@ -20,8 +20,8 @@ ublk_SOURCES = ublksrv_tgt.cpp tgt_null.cpp tgt_loop.cpp qcow2/tgt_qcow2.cpp \
 			   qcow2/qcow2_flush_meta.cpp \
 			   nbd/tgt_nbd.cpp nbd/cliserv.c nbd/nbd-client.c
 ublk_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
-ublk_CPPFLAGS = $(ublk_CFLAGS) -I$(top_srcdir)/include
-ublk_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS)
+ublk_CPPFLAGS = $(ublk_CFLAGS) -I$(top_srcdir)/include -Icryptsetup_backend_test
+ublk_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS) cryptsetup_backend_test/crypto_test.a -lssl -lcrypto
 
 demo_null_SOURCES = demo_null.c
 demo_null_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)

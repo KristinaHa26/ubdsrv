@@ -1,0 +1,3 @@
+[submodule "cryptsetup_backend_test"]
+	path = cryptsetup_backend_test
+	url = https://github.com/mbroz/cryptsetup_backend_test

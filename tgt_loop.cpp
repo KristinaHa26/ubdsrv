@@ -6,8 +6,13 @@
 #include <sys/epoll.h>
 #include "ublksrv_tgt.h"
 
+#include <crypto_backend.h>
+
 static bool user_copy;
 static bool block_device;
+
+struct crypt_storage *storage = NULL;
+
 
 static bool backing_supports_discard(char *name)
 {
@@ -309,11 +314,40 @@ static void loop_queue_tgt_write(const struct ublksrv_queue *q,
 		struct io_uring_sqe *sqe;
 		void *buf = (void *)iod->addr;
 
+        char* b = (char*) buf;
+
+        /*
+        int rv = crypt_storage_init(&storage, 512, "aes", "cbc-essiv:sha256",
+                                    "\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c", 16, false);
+
+        if (rv == -ENOENT || rv == -ENOTSUP)
+            ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL\n");
+
+        if (rv) {
+            ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL, RV IS: %d\n", rv);
+        }
+        */
+
+        if (storage == NULL)
+            ublk_dbg(UBLK_DBG_QUEUE, "SCREAMING\n");
+
+        ublk_dbg(UBLK_DBG_QUEUE, "I LIVE\n");
+        if (storage) {
+            crypt_storage_encrypt(storage, 0, (iod->nr_sectors << 9), b);
+            ublk_dbg(UBLK_DBG_QUEUE, "I STILL LIVE AND I ENCRYPTED\n");
+        }
+
+        //for (int i = 0; i < (iod->nr_sectors << 9); i++)
+        //    b[i] ^= 6;
+
+        //crypt_storage_destroy(storage);
+
+
 		ublk_get_sqe_pair(q->ring_ptr, &sqe, NULL);
 		io_uring_prep_write(sqe, 1 /*fds[1]*/,
 			buf,
-			iod->nr_sectors << 9,
-			iod->start_sector << 9);
+			iod->nr_sectors << 9,    // len
+			iod->start_sector << 9);  // iv offset
 		io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 		/* bit63 marks us as tgt io */
 		sqe->user_data = build_user_data(tag, ublk_op, 0, 1);
@@ -421,6 +455,9 @@ static void loop_tgt_io_done(const struct ublksrv_queue *q,
 	int tag = user_data_to_tag(cqe->user_data);
 	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
 
+    const struct ublksrv_io_desc *iod = data->iod;
+    unsigned ublk_op = ublksrv_get_op(iod);
+
 	if (user_data_to_tgt_data(cqe->user_data))
 		return;
 
@@ -430,6 +467,42 @@ static void loop_tgt_io_done(const struct ublksrv_queue *q,
 			__func__, cqe->res, q->q_id,
 			user_data_to_tag(cqe->user_data),
 			user_data_to_op(cqe->user_data));
+
+
+    if (ublk_op == UBLK_IO_OP_READ) {
+        char* b = (char*) iod->addr;
+        /*
+
+        int rv = crypt_storage_init(&storage, 512, "aes", "cbc-essiv:sha256",
+                                    "\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c", 16, false);
+
+        if (rv == -ENOENT || rv == -ENOTSUP)
+            ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL\n");
+
+        if (rv) {
+            ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL RV IS: %d\n", rv);
+        }
+
+        */
+        if (storage == NULL)
+            ublk_dbg(UBLK_DBG_QUEUE, "SCREAMING\n");
+
+        ublk_dbg(UBLK_DBG_QUEUE, "I LIVE\n");
+        if (storage) {
+            crypt_storage_decrypt(storage, 0, iod->nr_sectors << 9, b);
+            ublk_dbg(UBLK_DBG_QUEUE, "I STILL LIVE AND I ENCRYPTED\n");
+        }
+        //for (int i = 0; i < (iod->nr_sectors << 9); i++)
+        //    b[i] ^= 6;
+
+        //crypt_storage_destroy(storage);
+    }
+
+    if (ublk_op == UBLK_IO_OP_WRITE) {
+        // free memory, switch pointers
+        // NOT NEEDED
+    }
+
 	io->tgt_io_cqe = cqe;
 	io->co.resume();
 }
@@ -456,4 +529,16 @@ static void tgt_loop_init() __attribute__((constructor));
 static void tgt_loop_init(void)
 {
 	ublksrv_register_tgt_type(&loop_tgt_type);
+
+    int rv = crypt_storage_init(&storage, 512, "aes", "cbc-essiv:sha256",
+                                "\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c", 16, false);
+
+    if (rv == -ENOENT || rv == -ENOTSUP)
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL\n");
+
+    if (rv) {
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL RV IS: %d\n", rv);
+    }
+
+    // crypt_storage_destroy(storage);
 }
