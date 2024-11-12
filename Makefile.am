@@ -7,15 +7,16 @@ EXTRA_DIST = \
 	.gitignore \
 	LICENSE
 
-SUBDIRS = doc include lib tests
+SUBDIRS = doc include lib tests cryptsetup_backend_test
 
 AM_CXXFLAGS = -std=c++20 -Wunused
 
 TGT_DIR = targets
 TGT_INC = $(top_srcdir)/$(TGT_DIR)/include
+CRYPTO_LIB = cryptsetup_backend_test/crypto_test.a -lssl -lcrypto
 
-sbin_PROGRAMS = ublk ublk.null ublk.loop ublk.nbd ublk_user_id
-noinst_PROGRAMS = demo_null demo_event
+sbin_PROGRAMS = ublk ublk.null ublk.loop ublk.nbd ublk.crypt ublk_user_id
+noinst_PROGRAMS = demo_null demo_event demo_crypt
 dist_sbin_SCRIPTS = utils/ublk_chown.sh utils/ublk_chown_docker.sh
 
 ublk_SOURCES = $(TGT_DIR)/ublk.cpp $(TGT_DIR)/ublksrv_tgt.cpp
@@ -34,6 +35,11 @@ ublk_loop_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
 ublk_loop_CPPFLAGS = $(ublk_loop_CFLAGS) -I$(top_srcdir)/include -I$(TGT_INC)
 ublk_loop_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS)
 
+ublk_crypt_SOURCES = $(TGT_DIR)/ublk.crypt.cpp $(TGT_DIR)/ublksrv_tgt.cpp
+ublk_crypt_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
+ublk_crypt_CPPFLAGS = $(ublk_crypt_CFLAGS) -I$(top_srcdir)/include -I$(TGT_INC) -Icryptsetup_backend_test
+ublk_crypt_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS) $(CRYPTO_LIB)
+
 ublk_nbd_SOURCES = $(TGT_DIR)/nbd/ublk.nbd.cpp $(TGT_DIR)/nbd/cliserv.c $(TGT_DIR)/nbd/nbd-client.c $(TGT_DIR)/ublksrv_tgt.cpp
 ublk_nbd_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
 ublk_nbd_CPPFLAGS = $(ublk_nbd_CFLAGS) -I$(top_srcdir)/include -I$(TGT_INC)
@@ -48,6 +54,11 @@ demo_event_SOURCES = demo_event.c
 demo_event_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
 demo_event_CPPFLAGS = $(demo_event_CFLAGS) -I$(top_srcdir)/include
 demo_event_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS)
+
+demo_crypt_SOURCES = demo_crypt.c ublkcrypt.cpp
+demo_crypt_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)
+demo_crypt_CPPFLAGS = $(demo_crypt_CFLAGS) -I$(top_srcdir)/include -Icryptsetup_backend_test -I$(TGT_INC)
+demo_crypt_LDADD = lib/libublksrv.la $(LIBURING_LIBS) $(PTHREAD_LIBS) $(CRYPTO_LIB)
 
 ublk_user_id_SOURCES = utils/ublk_user_id.c
 ublk_user_id_CFLAGS = $(WARNINGS_CFLAGS) $(LIBURING_CFLAGS) $(PTHREAD_CFLAGS)

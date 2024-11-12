@@ -186,6 +186,7 @@ int ublksrv_json_read_target_ulong_info(const char *jbuf,
 	if (!j.contains("target"))
 		return -EINVAL;
 
+    ublk_dbg(UBLK_DBG_QUEUE, "je tam target\n");
 	auto tj = j["target"];
 
 	if (!tj.contains(name))

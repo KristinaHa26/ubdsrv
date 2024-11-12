@@ -675,7 +675,7 @@ static int ublksrv_create_pid_file(struct _ublksrv_dev *dev)
 {
 	int dev_id = dev->ctrl_dev->dev_info.dev_id;
 	char pid_file[64];
-	int ret, pid_fd;
+	int ret, pid_fd = -1;
 
 	if (!dev->ctrl_dev->run_dir)
 		return 0;
@@ -687,7 +687,8 @@ static int ublksrv_create_pid_file(struct _ublksrv_dev *dev)
 	if (ret < 0) {
 		/* -1 means the file is locked, and we need to remove it */
 		if (ret == -1) {
-			close(pid_fd);
+			if (pid_fd >= 0)
+				close(pid_fd);
 			unlink(pid_file);
 		}
 		return ret;

@@ -154,6 +154,9 @@ int ublk_json_write_params(const struct ublksrv_ctrl_dev *dev, const struct ublk
 int ublk_json_write_target_base(const struct ublksrv_ctrl_dev *dev,
 		const struct ublksrv_tgt_base_json *tgt);
 
+
+char *ublksrv_tgt_get_dev_data(struct ublksrv_ctrl_dev *cdev);
+
 static inline void ublk_get_sqe_pair(struct io_uring *r,
 		struct io_uring_sqe **sqe, struct io_uring_sqe **sqe2)
 {

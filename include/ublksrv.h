@@ -121,6 +121,7 @@ struct ublksrv_tgt_type;
 struct ublksrv_tgt_info {
 	/** device size */
 	unsigned long long dev_size;
+    // dev offset here?
 
 	/**
 	 * target ring depth, for handling target IOs
@@ -135,6 +136,7 @@ struct ublksrv_tgt_info {
 
 	/** target private data */
 	void *tgt_data;
+    // vytvorit si svoju strukturu na private data
 
 	/**
 	 * Extra IO slots for each queue, target code can reserve some
