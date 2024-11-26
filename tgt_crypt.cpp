@@ -6,8 +6,13 @@
 #include <sys/epoll.h>
 #include "ublksrv_tgt.h"
 
+#include <crypto_backend.h>
+
 static bool user_copy;
 static bool block_device;
+
+struct crypt_storage *storage = NULL;
+
 
 static bool backing_supports_discard(char *name)
 {
@@ -34,7 +39,7 @@ static bool backing_supports_discard(char *name)
 	return false;
 }
 
-static int loop_setup_tgt(struct ublksrv_dev *dev, int type, bool recovery,
+static int crypt_setup_tgt(struct ublksrv_dev *dev, int type, bool recovery,
 		const char *jbuf)
 {
 	struct ublksrv_tgt_info *tgt = &dev->tgt;
@@ -91,17 +96,17 @@ static int loop_setup_tgt(struct ublksrv_dev *dev, int type, bool recovery,
 	return 0;
 }
 
-static int loop_recovery_tgt(struct ublksrv_dev *dev, int type)
+static int crypt_recovery_tgt(struct ublksrv_dev *dev, int type)
 {
 	const struct ublksrv_ctrl_dev *cdev = ublksrv_get_ctrl_dev(dev);
 	const char *jbuf = ublksrv_ctrl_get_recovery_jbuf(cdev);
 
-	ublk_assert(type == UBLKSRV_TGT_TYPE_LOOP);
+	ublk_assert(type == UBLKSRV_TGT_TYPE_CRYPT);
 
-	return loop_setup_tgt(dev, type, true, jbuf);
+	return crypt_setup_tgt(dev, type, true, jbuf);
 }
 
-static int loop_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
+static int crypt_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		*argv[])
 {
 	int buffered_io = 0;
@@ -110,12 +115,22 @@ static int loop_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	static const struct option lo_longopts[] = {
 		{ "file",		1,	NULL, 'f' },
 		{ "buffered_io",	no_argument, &buffered_io, 1},
+        { "cipher", 1, NULL, 'c'},
+        { "key", 1, NULL, 'k'},
+        { "iv_offset", 1, NULL, 'i'},
+        { "sector_size", 1, NULL, 's'},
 		{ NULL }
 	};
 	unsigned long long bytes;
 	struct stat st;
 	int fd, opt;
 	char *file = NULL;
+    char* cipher = NULL;
+    char* key = NULL;
+    int iv_offset = 0;
+    int sector_size = 0;
+    char* cipher_name = NULL;
+    char* mode_iv = NULL;
 	int jbuf_size;
 	char *jbuf;
 	struct ublksrv_tgt_base_json tgt_json = {
@@ -138,16 +153,28 @@ static int loop_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	};
 	bool can_discard = false;
 
-	strcpy(tgt_json.name, "loop");
+	strcpy(tgt_json.name, "crypt");
 
-	if (type != UBLKSRV_TGT_TYPE_LOOP)
+	if (type != UBLKSRV_TGT_TYPE_CRYPT)
 		return -1;
 
-	while ((opt = getopt_long(argc, argv, "-:f:",
+	while ((opt = getopt_long(argc, argv, "-:f:c:k:o:s:",
 				  lo_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'f':
 			file = strdup(optarg);
+			break;
+		case 'c':
+			cipher = strdup(optarg);
+			break;
+		case 'k':
+			key = strdup(optarg);
+			break;
+		case 'o':
+			iv_offset = strtoll(optarg, NULL, 10);
+			break;
+		case 's':
+			sector_size = strtoll(optarg, NULL, 10);
 			break;
 		}
 	}
@@ -188,6 +215,19 @@ static int loop_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		bytes = 0;
 	}
 
+    cipher_name = strtok(cipher, "-");
+    mode_iv = strtok(NULL, " ");
+
+
+    int rv = crypt_storage_init(&storage, sector_size, cipher_name, mode_iv, key, strlen(key), false);
+
+    if (rv == -ENOENT || rv == -ENOTSUP)
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL\n");
+
+    if (rv) {
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL RV IS: %d\n", rv);
+    }
+
 	/*
 	 * in case of buffered io, use common bs/pbs so that all FS
 	 * image can be supported
@@ -212,26 +252,33 @@ static int loop_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	ublk_json_write_target_base(dev, &jbuf, &jbuf_size, &tgt_json);
 	ublk_json_write_tgt_str(dev, &jbuf, &jbuf_size, "backing_file", file);
 	ublk_json_write_tgt_long(dev, &jbuf, &jbuf_size, "direct_io", !buffered_io);
+	ublk_json_write_tgt_str(dev, &jbuf, &jbuf_size, "cipher_name", cipher_name);
+	ublk_json_write_tgt_str(dev, &jbuf, &jbuf_size, "mode_iv", mode_iv);
+	//ublk_json_write_tgt_str(dev, &jbuf, &jbuf_size, "key", key);
+	ublk_json_write_tgt_long(dev, &jbuf, &jbuf_size, "iv_offset", iv_offset);
+	ublk_json_write_tgt_long(dev, &jbuf, &jbuf_size, "sector_size", sector_size);
 	ublk_json_write_params(dev, &jbuf, &jbuf_size, &p);
 
 	close(fd);
 
-	return loop_setup_tgt(dev, type, false, jbuf);
+	return crypt_setup_tgt(dev, type, false, jbuf);
 }
 
-static void loop_usage_for_add(void)
+static void crypt_usage_for_add(void)
 {
-	printf("           loop: -f backing_file [--buffered_io]\n");
-	printf("           	default is direct IO to backing file\n");
+	printf("           crypt: -f backing_file -c cipher -k key\n");
+	printf("                -o iv_offset -s sector size [--buffered_io]\n");
+	printf("	        default is direct IO to backing file\n");
+	printf("	        cipher is expected in format cipher-mode-iv_mode\n");
 }
 
-static inline int loop_fallocate_mode(const struct ublksrv_io_desc *iod)
+static inline int crypt_fallocate_mode(const struct ublksrv_io_desc *iod)
 {
        __u16 ublk_op = ublksrv_get_op(iod);
        __u32 flags = ublksrv_get_flags(iod);
        int mode = FALLOC_FL_KEEP_SIZE;
 
-       /* follow logic of linux kernel loop */
+       /* follow logic of linux kernel crypt */
        if (ublk_op == UBLK_IO_OP_DISCARD) {
                mode |= FALLOC_FL_PUNCH_HOLE;
        } else if (ublk_op == UBLK_IO_OP_WRITE_ZEROES) {
@@ -246,7 +293,7 @@ static inline int loop_fallocate_mode(const struct ublksrv_io_desc *iod)
        return mode;
 }
 
-static void loop_queue_tgt_read(const struct ublksrv_queue *q,
+static void crypt_queue_tgt_read(const struct ublksrv_queue *q,
 		const struct ublksrv_io_desc *iod, int tag)
 {
 	unsigned ublk_op = ublksrv_get_op(iod);
@@ -283,7 +330,7 @@ static void loop_queue_tgt_read(const struct ublksrv_queue *q,
 	}
 }
 
-static void loop_queue_tgt_write(const struct ublksrv_queue *q,
+static void crypt_queue_tgt_write(const struct ublksrv_queue *q,
 		const struct ublksrv_io_desc *iod, int tag)
 {
 	unsigned ublk_op = ublksrv_get_op(iod);
@@ -309,6 +356,17 @@ static void loop_queue_tgt_write(const struct ublksrv_queue *q,
 		struct io_uring_sqe *sqe;
 		void *buf = (void *)iod->addr;
 
+        char* b = (char*) buf;
+
+        if (storage == NULL)
+            ublk_dbg(UBLK_DBG_QUEUE, "SCREAMING\n");
+
+        //ublk_dbg(UBLK_DBG_QUEUE, "I LIVE\n");
+        if (storage) {
+            crypt_storage_encrypt(storage, iod->start_sector, (iod->nr_sectors << 9), b);
+            ublk_dbg(UBLK_DBG_QUEUE, "I STILL LIVE AND I ENCRYPTED\n");
+        }
+
 		ublk_get_sqe_pair(q->ring_ptr, &sqe, NULL);
 		io_uring_prep_write(sqe, 1 /*fds[1]*/,
 			buf,
@@ -320,7 +378,7 @@ static void loop_queue_tgt_write(const struct ublksrv_queue *q,
 	}
 }
 
-static int loop_queue_tgt_io(const struct ublksrv_queue *q,
+static int crypt_queue_tgt_io(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data, int tag)
 {
 	const struct ublksrv_io_desc *iod = data->iod;
@@ -342,7 +400,7 @@ static int loop_queue_tgt_io(const struct ublksrv_queue *q,
 	case UBLK_IO_OP_DISCARD:
 		ublk_get_sqe_pair(q->ring_ptr, &sqe, NULL);
 		io_uring_prep_fallocate(sqe, 1 /*fds[1]*/,
-				loop_fallocate_mode(iod),
+				crypt_fallocate_mode(iod),
 				iod->start_sector << 9,
 				iod->nr_sectors << 9);
 		io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
@@ -350,10 +408,10 @@ static int loop_queue_tgt_io(const struct ublksrv_queue *q,
 		sqe->user_data = build_user_data(tag, ublk_op, 0, 1);
 		break;
 	case UBLK_IO_OP_READ:
-		loop_queue_tgt_read(q, iod, tag);
+		crypt_queue_tgt_read(q, iod, tag);
 		break;
 	case UBLK_IO_OP_WRITE:
-		loop_queue_tgt_write(q, iod, tag);
+		crypt_queue_tgt_write(q, iod, tag);
 		break;
 	default:
 		return -EINVAL;
@@ -365,7 +423,7 @@ static int loop_queue_tgt_io(const struct ublksrv_queue *q,
 	return 1;
 }
 
-static co_io_job __loop_handle_io_async(const struct ublksrv_queue *q,
+static co_io_job __crypt_handle_io_async(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data, int tag)
 {
 	int ret;
@@ -373,7 +431,7 @@ static co_io_job __loop_handle_io_async(const struct ublksrv_queue *q,
 
 	io->queued_tgt_io = 0;
  again:
-	ret = loop_queue_tgt_io(q, data, tag);
+	ret = crypt_queue_tgt_io(q, data, tag);
 	if (ret > 0) {
 		if (io->queued_tgt_io)
 			ublk_err("bad queued_tgt_io %d\n", io->queued_tgt_io);
@@ -393,7 +451,7 @@ static co_io_job __loop_handle_io_async(const struct ublksrv_queue *q,
 	}
 }
 
-static int loop_handle_io_async(const struct ublksrv_queue *q,
+static int crypt_handle_io_async(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data)
 {
 	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
@@ -409,12 +467,12 @@ static int loop_handle_io_async(const struct ublksrv_queue *q,
 		res = ioctl(q->dev->tgt.fds[1], BLKDISCARD, &r);
 		ublksrv_complete_io(q, data->tag, res);
 	} else {
-		io->co = __loop_handle_io_async(q, data, data->tag);
+		io->co = __crypt_handle_io_async(q, data, data->tag);
 	}
 	return 0;
 }
 
-static void loop_tgt_io_done(const struct ublksrv_queue *q,
+static void crypt_tgt_io_done(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data,
 		const struct io_uring_cqe *cqe)
 {
@@ -434,30 +492,65 @@ static void loop_tgt_io_done(const struct ublksrv_queue *q,
 			user_data_to_tag(cqe->user_data),
 			user_data_to_op(cqe->user_data));
 
+
+    if (ublk_op == UBLK_IO_OP_READ) {
+        char* b = (char*) iod->addr;
+
+        if (storage == NULL)
+            ublk_dbg(UBLK_DBG_QUEUE, "SCREAMING\n");
+
+        ublk_dbg(UBLK_DBG_QUEUE, "I LIVE\n");
+        if (storage) {
+            crypt_storage_decrypt(storage, iod->start_sector, iod->nr_sectors << 9, b);
+            ublk_dbg(UBLK_DBG_QUEUE, "I STILL LIVE AND I ENCRYPTED\n");
+        }
+    }
+
+    if (ublk_op == UBLK_IO_OP_WRITE) {
+        // free memory, switch pointers
+        // NOT NEEDED
+    }
+
 	io->tgt_io_cqe = cqe;
 	io->co.resume();
 }
 
-static void loop_deinit_tgt(const struct ublksrv_dev *dev)
+static void crypt_deinit_tgt(const struct ublksrv_dev *dev)
 {
 	fsync(dev->tgt.fds[1]);
 	close(dev->tgt.fds[1]);
+
+    crypt_storage_destroy(storage);
 }
 
-struct ublksrv_tgt_type  loop_tgt_type = {
-	.handle_io_async = loop_handle_io_async,
-	.tgt_io_done = loop_tgt_io_done,
-	.usage_for_add	=  loop_usage_for_add,
-	.init_tgt = loop_init_tgt,
-	.deinit_tgt	=  loop_deinit_tgt,
-	.type	= UBLKSRV_TGT_TYPE_LOOP,
-	.name	=  "loop",
-	.recovery_tgt = loop_recovery_tgt,
+struct ublksrv_tgt_type  crypt_tgt_type = {
+	.handle_io_async = crypt_handle_io_async,
+	.tgt_io_done = crypt_tgt_io_done,
+	.usage_for_add	=  crypt_usage_for_add,
+	.init_tgt = crypt_init_tgt,
+	.deinit_tgt	=  crypt_deinit_tgt,
+	.type	= UBLKSRV_TGT_TYPE_CRYPT,
+	.name	=  "crypt",
+	.recovery_tgt = crypt_recovery_tgt,
 };
 
-static void tgt_loop_init() __attribute__((constructor));
+static void tgt_crypt_init() __attribute__((constructor));
 
-static void tgt_loop_init(void)
+static void tgt_crypt_init(void)
 {
-	ublksrv_register_tgt_type(&loop_tgt_type);
+	ublksrv_register_tgt_type(&crypt_tgt_type);
+
+    /*
+    int rv = crypt_storage_init(&storage, 512, "aes", "cbc-plain64",
+                                "\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c", 16, false);
+
+    if (rv == -ENOENT || rv == -ENOTSUP)
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL\n");
+
+    if (rv) {
+        ublk_dbg(UBLK_DBG_QUEUE, "STORAGE INIT FAIL RV IS: %d\n", rv);
+    }
+
+    */
+    // crypt_storage_destroy(storage);
 }

@@ -126,6 +126,8 @@ enum {
 	/* ublksrv_loop vs. /dev/loop */
 	UBLKSRV_TGT_TYPE_LOOP,
 
+    UBLKSRV_TGT_TYPE_CRYPT,
+
 	UBLKSRV_TGT_TYPE_QCOW2,
 
 	UBLKSRV_TGT_TYPE_NBD,
